@@ -1,5 +1,5 @@
-module TTNUtils
 
+module TTNUtils
 """
 Utilities for TTN project — fused-topology helpers and index mappings.
 

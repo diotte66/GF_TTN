@@ -53,7 +53,7 @@ function init(topo::Dict{String,NamedGraph{Int64}}, f; R::Int, d::Int, localdims
     kwargs = (
         maxiter=5,
         sweepstrategy=TreeTCI.LocalAdjacentSweep2sitePathProposer(),
-        tolerance=1e-4,
+        tolerance=1e-10,
     )
 
     println("---- Starting structural optimization runs ----")
@@ -88,11 +88,11 @@ function main()
     localdims = fill(2, d * R) # local dimensions for d dimensions with R bits each
 
     topo = Dict(
-        "BTTN" => BTTN(R, d),
+        #"BTTN" => BTTN(R, d),
         "QTT_Int" => QTT_Alt(R, d),
-        "QTT_Seq" => QTT_Block(R, d),
-        "CTTN" => CTTN(R, d),
-        "TTTN" => TTTN(R, d)
+        #"QTT_Seq" => QTT_Block(R, d),
+        #"CTTN" => CTTN(R, d),
+        #"TTTN" => TTTN(R, d)
     )
 
     newtopo = init(Dict("QTT_Int" => QTT_Alt(R, d)), dcgf; R=R, d=d, localdims=localdims)
@@ -110,6 +110,7 @@ function main()
     error_pivot = zeros(ntopos, nsteps)
     rankendlist = zeros(ntopos, nsteps)
     ranklist = zeros(ntopos, nsteps)
+    mem = zeros(ntopos, nsteps)
 
     kwargs = (
         maxiter=maxit,
@@ -123,12 +124,7 @@ function main()
             kwargs = merge(kwargs, (maxbonddim=step * k,))
             println("Topology: $name")
             ttn, ranks, errors, bonds = TreeTCI.crossinterpolate(ComplexF64, dcgf, localdims, graph; kwargs...)
-            if name == "QTT_Int_maxdeg3"
-                ITensor_ttn = TreeTCI.convert_ITensorNetwork(ttn, 1)
-                println(" ITensor Network structure:")
-                print(ITensor_ttn)
-                println(" Bonds: ", bonds)
-            end
+            mem[i, k] = Base.summarysize(ttn)
             errl1 = sampled_error(dcgf, ttn, nsamples, R, d)
             error_l1[i, k] = errl1
             rankendlist[i, k] = ranks[end]
@@ -138,11 +134,15 @@ function main()
     end
 
     p1 = plot(title="Sampled L1 Error vs Max Bond Dimension", xlabel="Max Bond Dimension", ylabel="Sampled L1 Error", yscale=:log10)
+    p2 = plot(title="Sampled L1 Error vs Memory", xlabel="Memory (kB)", ylabel="Sampled L1 Error", yscale=:log10)
     topo_names = collect(keys(fulltopo))
     for i in 1:ntopos
         plot!(p1, step:step:step*nsteps, error_l1[i, :], label=topo_names[i], marker=:o)
+        plot!(p2, mem[i, :] / 1000, error_l1[i, :], label=topo_names[i], marker=:o)
     end
-    savefig(p1, "dcgf_sampled_l1_error.svg")
-    display(p1)
+    plt = plot(p1, p2, layout=(1, 2), size=(1200, 500))
+    savefig(plt, "dcgf_sampled_l1_error.svg")
+    display(plt)
+
 
 end

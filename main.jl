@@ -1,86 +1,58 @@
 using Random
 using Plots
-include(joinpath(@__DIR__, "src", "topologies.jl"))
-include(joinpath(@__DIR__, "src", "utils.jl"))
-using .TTNUtils: bits2decimal, fused_preparations, compress_indexset
+include(joinpath(@__DIR__, "src", "utils_gk.jl"))
 using TreeTCI
 
-function sampled_error(f, ttn, nsamples, bits, d)
-    """ Compute sampled errors between function f and ttn approximation over nsamples random inputs of length 2*bits."""
-    eval_ttn = if ttn isa TreeTCI.SimpleTCI
-        sitetensors = TreeTCI.fillsitetensors(ttn, f)
-        TreeTCI.TreeTensorNetwork(ttn.g, sitetensors)
-    else
-        ttn
-    end
-    error_l1 = 0.0
-    for _ in 1:nsamples
-        # Generate a random 3R sequence of 1s and 2s
-        x = rand(1:2, d * bits)
-        # Evaluate the concrete TreeTensorNetwork (it provides evaluate/call)
-        approx = TreeTCI.evaluate(eval_ttn, x)
-        err = abs(f(x) - approx)
-        error_l1 += err
-    end
-    return error_l1 / nsamples
+function gkdc(v, nk::Int64, R::Int64, β::Float64, E::Float64)
+    """ Momentum-dependent equilibrium Green's function G_{kx,ky}(t,t') """
+    kx, ky, t1, t2 = assign(v, nk, R)
+    return -1im * exp(-1im * ((ϵ(kx, ky) * sin(E * t1) / E) + δ(kx, ky) * (cos(E * t1) - 1) / E - ϵ(kx, ky) * sin(E * t2) / E - δ(kx, ky) * (cos(E * t2) - 1) / E)) * exp(-abs(t1 - t2)) * n(kx, ky, β)
 end
 
-global n = 30
-global ϵ = abs.(randn(n)) * 3.0
-global λ = abs.(randn(n)) * 10.0
-
-function gf(v)
-    """ Fictious Green's function in 2D with 30 different wavevectors k_j """
-    x = bits2decimal(v[1:div(length(v), 2)])
-    y = bits2decimal(v[div(length(v), 2)+1:end])
-    # Use the module-level globals `n`, `ϵ`, `λ` (avoid shadowing them with a local `n = n`)
-    n_local = n
-    eps_local = ϵ
-    lambda_local = λ
-    g = zero(ComplexF64)
-    for j in 1:n_local
-        g += exp(-1im * j * eps_local[j] * (x - y)) * exp(-lambda_local[j] * abs(x - y))
-    end
-    return 1im * g
+function gk(v, nk, R)
+    """ Momentum-dependent equilibrium Green's function G_{kx,ky}(t,t') """
+    kx, ky, t1, t2 = assign(v, nk, R)
+    return -1im * exp(-1im * ϵ(kx, ky) * (t1 - t2)) * exp(-abs(t1 - t2))
 end
-
 
 function main()
-    # Parameters for TCI
-    R = 16 # number of bits per dimension
-    d = 2 # spatial dimension
-    localdims = fill(2, d * R) # local dimensions for d dimensions with R bits each
+    """
+        main function for the compression of momentum dependent Green's function G_{kx,ky}(t,t')
+    """
+    Rt = 16  # number of time bits
+    Nk = 256  # size of the lattice in one dimension (number of k-points bits)
+    nk = Int(log2(Nk)) # number of bits to encode the Nk kx,ky points 
+    d = 4  # total dimensions: kx, ky, t, t'
+    localdims = fill(2, 2 * Rt + 2 * nk)
+
+    β = 10.0  # inverse temperature
+    E = 10.0  # electric field amplitude
 
     topo = Dict(
-        #"BTTN" => BTTN(R, d),
-        "QTT_Int" => QTT_Alt(R, d),
-        #"QTT_Seq" => QTT_Block(R, d),
-        #"CTTN" => CTTN(R, d)
+        #"QTT_Seq" => QTTSEQ(Rt, nk),
+        #"QTT_Alt" => QTTALT(Rt, nk),
+        #"QTT_Alt2" => QTTALT2(Rt, nk),
+        #"QTT_Alt3" => QTTALT3(Rt, nk),
+        #"QTT_Alt4" => QTTALT4(Rt, nk),
+        "CTTN_Alt" => CTTNALT(Rt, nk),
+        "CTTN_Alt2" => CTTNALT2(Rt, nk),
+        #"CTTN_Seq" => CTTNSEQ(Rt, nk),
+        #"BTTN" => BTTN(Rt, nk)
     )
+
     ntopos = length(topo)
-    nsteps = 1
-    step = 20
-    maxit = 1
 
-    # Output storage
-    error_l1 = zeros(ntopos, nsteps)
-    error_pivot = zeros(ntopos, nsteps)
-    rankendlist = zeros(ntopos, nsteps)
-    ranklist = zeros(ntopos, nsteps)
+    for (j, (toponame, topology)) in enumerate(topo)
+        println("------------ Topology: $toponame ------------")
+        kwargs = (
+            maxiter=5,
+            maxbonddim=60,
+            sweepstrategy=TreeTCI.LocalAdjacentSweep2sitePathProposer(),
+        )
+        ttn = TreeTCI.SimpleTCI{ComplexF64}(v -> gk(v, nk, Rt), localdims, topology)
+        seed_pivots!(ttn, 10)
+        ranks, errors, bonds = TreeTCI.optimize!(ttn, v -> gk(v, nk, Rt); kwargs...)
+        println(" Bonds: ", bonds)
 
-    for (i, (name, graph)) in enumerate(topo)
-        println("Topology: $name")
-        for stepidx in 1:nsteps
-            kwargs = (
-                maxiter=5,
-                maxbonddim=stepidx * step,
-                sweepstrategy=TreeTCI.LocalAdjacentSweep2sitePathProposer(),
-                tolerance=1e-6,
-            )
-            println(" Step $stepidx/$nsteps: maxbonddim = $(kwargs.maxbonddim)")
-            ttn, ranks, errors, bonds = TreeTCI.crossinterpolate(ComplexF64, gf, localdims, graph; kwargs...)
-            println(bonds)
-        end
     end
-
 end
