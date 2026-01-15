@@ -2,7 +2,7 @@
 
 julia_version = "1.12.1"
 manifest_format = "2.0"
-project_hash = "ee98dcdc0561aadabc25bc1167a2aec5e646b8c2"
+project_hash = "4e2146ed1c73a6640c9428aac9354efe9ffe9bd8"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "8b2b045b22740e4be20654175cc38291d48539db"
@@ -925,6 +925,26 @@ deps = ["InteractiveUtils", "MacroTools"]
 git-tree-sha1 = "57e9ce6cf68d0abf5cb6b3b4abf9bedf05c939c0"
 uuid = "7869d1d1-7146-5819-86e3-90919afe41df"
 version = "0.4.15"
+
+[[deps.ITensorMPS]]
+deps = ["Adapt", "Compat", "ITensors", "IsApprox", "KrylovKit", "LinearAlgebra", "NDTensors", "Printf", "Random", "SerializedElementArrays", "TupleTools"]
+git-tree-sha1 = "a45a71b629707b5a1f39cd225d1618a7376e1e88"
+uuid = "0d1a4710-d33b-49a5-8f18-73bdf49b47e2"
+version = "0.3.25"
+
+    [deps.ITensorMPS.extensions]
+    ITensorMPSChainRulesCoreExt = "ChainRulesCore"
+    ITensorMPSHDF5Ext = "HDF5"
+    ITensorMPSObserversExt = "Observers"
+    ITensorMPSPackageCompilerExt = "PackageCompiler"
+    ITensorMPSZygoteRulesExt = ["ChainRulesCore", "ZygoteRules"]
+
+    [deps.ITensorMPS.weakdeps]
+    ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+    HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
+    Observers = "338f10d5-c7f1-4033-a7d1-f9dec39bcaa0"
+    PackageCompiler = "9b87118b-4619-50d2-8e1e-99f35a4d4d9d"
+    ZygoteRules = "700de1a5-db45-46bc-99cf-38207098b444"
 
 [[deps.ITensorNetworks]]
 deps = ["AbstractTrees", "Adapt", "Combinatorics", "Compat", "DataGraphs", "DataStructures", "Dictionaries", "Distributions", "DocStringExtensions", "Graphs", "ITensors", "IsApprox", "IterTools", "KrylovKit", "LinearAlgebra", "MacroTools", "NDTensors", "NamedGraphs", "Printf", "Random", "SerializedElementArrays", "SimpleTraits", "SplitApplyCombine", "StaticArrays", "StructWalk", "Suppressor", "TimerOutputs", "TupleTools"]
@@ -2540,13 +2560,10 @@ repo-rev = "main"
 repo-url = "https://github.com/tensor4all/TensorCrossInterpolation.jl.git"
 uuid = "b261b2ec-6378-4871-b32e-9173bb050604"
 version = "0.9.18"
+weakdeps = ["ITensorMPS", "ITensors"]
 
     [deps.TensorCrossInterpolation.extensions]
     TCIITensorConversion = ["ITensors", "ITensorMPS"]
-
-    [deps.TensorCrossInterpolation.weakdeps]
-    ITensorMPS = "0d1a4710-d33b-49a5-8f18-73bdf49b47e2"
-    ITensors = "9136182c-28ba-11e9-034c-db9fb085ebd5"
 
 [[deps.Test]]
 deps = ["InteractiveUtils", "Logging", "Random", "Serialization"]
@@ -2600,7 +2617,7 @@ version = "0.4.85"
 
 [[deps.TreeTCI]]
 deps = ["Combinatorics", "DataGraphs", "DataStructures", "Distributions", "Flux", "GraphTikZ", "Graphs", "ITensorNetworks", "ITensors", "NPZ", "NamedGraphs", "QuanticsGrids", "Random", "Revise", "SimpleTensorNetworks", "SparseIR", "Statistics", "T4ARegistrator", "TensorCrossInterpolation"]
-git-tree-sha1 = "5e6811a3b62fa6fa9a076fe8a705081d1ccc9b14"
+git-tree-sha1 = "24f685667ed436af6558e9f384642754f3e7383b"
 repo-rev = "structure_update"
 repo-url = "https://github.com/tristanlinfo/TreeTCI.jl.git"
 uuid = "ac02bf95-72b1-4658-a692-4d4ff10c3b7f"
