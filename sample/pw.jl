@@ -1,9 +1,12 @@
 using Random
 using Plots
+using LaTeXStrings
 include(joinpath(@__DIR__, "..", "src", "topologies.jl"))
 include(joinpath(@__DIR__, "..", "src", "utils.jl"))
 using .TTNUtils: bits2decimal
 using TreeTCI
+using Serialization
+using DelimitedFiles
 
 function sampled_error(f, ttn, nsamples, bits, d)
     """ Compute sampled errors between function f and ttn approximation over nsamples random inputs of length 2*bits."""
@@ -38,83 +41,102 @@ function pw(v)
     return sum
 end
 
-function plotpw()
-    f(x, y) = sum(cos(i * [x, y]' * randn(2)) for i in 1:n)
-    xs = ys = range(0, 1, length=100)
-    zs = [f(x, y) for x in xs, y in ys]
-    heatmap(xs, ys, zs, title="Plane Wave Amplitude", xlabel="x", ylabel="y", colorbar_title="f(x,y)")
-    savefig("SVG/PW/plane_wave_amplitude.svg")
-end
-
-function main()
-    # Parameters for TCI
+function default_config()
     R = 16 # number of bits per dimension
-    d = 3 # spatial dimension
-    localdims = fill(2, d * R) # local dimensions for d dimensions with R bits each
-
+    d = 3  # spatial dimension
+    localdims = fill(2, d * R)
     topo = Dict(
         "BTTN" => BTTN(R, d),
         "QTT_Seq" => QTT_Block(R, d),
         "QTT_Int" => QTT_Alt(R, d),
         "CTTN" => CTTN(R, d),
-        "BTTN2" => BTTN2(R, d)
     )
-
-    ntopos = length(topo)
-    nsteps = 16
-    step = 3
     maxit = 5
+    nsamples = 1000
+    # maxbond list to sweep
+    maxbond = [3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45, 48, 51, 54, 57, 60]
+    times = [0.0] # placeholder to match gk.jl structure
+    return (R=R, d=d, localdims=localdims, topo=topo, maxit=maxit, nsamples=nsamples, maxbond=maxbond, times=times)
+end
 
-    # Output storage
-    error_l1 = zeros(ntopos, nsteps)
-    error_pivot = zeros(ntopos, nsteps)
-    rankendlist = zeros(ntopos, nsteps)
-    ranklist = zeros(ntopos, nsteps)
+function plotpw()
+    f(x, y) = sum(cos(i * [x, y]' * randn(2)) for i in 1:n)
+    xs = ys = range(0, 1, length=1000)
+    zs = [f(x, y) for x in xs, y in ys]
+    heatmap(xs, ys, zs, xlabel=L"$x$", ylabel=L"$y$", colorbar_title=L"Amplitude $f$", size=(900, 700), guidefont=font(12), tickfont=font(10), colorbar_tickfont=font(9))
+    mkpath("PDF/PW")
+    savefig("PDF/PW/plane_wave_amplitude.pdf")
+end
 
-    # generate 10 random global pivot of length 3R
-    global_pivots = Vector{Vector{Int}}()
-    for _ in 1:10
-        push!(global_pivots, rand(1:2, length(localdims)))
-    end
-
-    #-----------------------------
-    # Main loop over maxbonddim
-    #-----------------------------
-    for i in 1:nsteps
-        maxbd = step * i
-        println("Max bond dimension: $maxbd")
-        tstart = @elapsed begin
-            # -----------------------------
-            # Construct initial TCIs
-            # -----------------------------
-            for (j, (toponame, topology)) in enumerate(topo)
-                println("Topology: $toponame")
-                # Build Simple TCIs so each run starts from identical initial pivots
-                ttn = TreeTCI.SimpleTCI{Float64}(pw, localdims, topology)
-                #TreeTCI.addglobalpivots!(ttn,global_pivots)
-                # Optimize TCI
-                ranks, errors = TreeTCI.optimize!(ttn, pw; maxiter=maxit, maxbonddim=maxbd, sweepstrategy=TreeTCI.LocalAdjacentSweep2sitePathProposer())
-
-                # Compute sampled L1 error
-                errl1 = sampled_error(pw, ttn, 1000, R, d)
-
-
-                # Store results
-                error_l1[j, i] = errl1
-                error_pivot[j, i] = errors[end]
-                rankendlist[j, i] = ranks[end]
-                ranklist[j, i] = maxbd
-            end
-
-        end # tstart elapsed
-        println("Elapsed time for step $step: $tstart seconds")
-    end
-
-    p1 = plot(xlabel="Max bond dimension", ylabel="Sampled L1 Error", yscale=:log10)
+function run_experiment(cfg)
+    topo = cfg.topo
+    ntopos = length(topo)
+    nbonds = length(cfg.maxbond)
     topo_names = collect(keys(topo))
-    for j in 1:ntopos
-        plot!(p1, step * collect(1:nsteps), error_l1[j, :], label=topo_names[j], marker=:o)
+
+    error_l1 = zeros(ntopos, nbonds)
+    mem = zeros(ntopos, nbonds)
+    error_pivot = zeros(ntopos, nbonds)
+    rankendlist = zeros(ntopos, nbonds)
+    ranklist = zeros(ntopos, nbonds)
+
+    for (idx_bond, maxbd) in enumerate(cfg.maxbond)
+        println("Max bond dimension: $maxbd")
+        for (j, (toponame, topology)) in enumerate(topo)
+            println("Topology: $toponame")
+            ttn = TreeTCI.SimpleTCI{Float64}(pw, cfg.localdims, topology)
+            ranks, errors = TreeTCI.optimize!(ttn, pw; maxiter=cfg.maxit, maxbonddim=maxbd, sweepstrategy=TreeTCI.LocalAdjacentSweep2sitePathProposer())
+            errl1 = sampled_error(pw, ttn, cfg.nsamples, cfg.R, cfg.d)
+            mem[j, idx_bond] = Base.summarysize(ttn)
+            error_l1[j, idx_bond] = errl1
+            error_pivot[j, idx_bond] = errors[end]
+            rankendlist[j, idx_bond] = ranks[end]
+            ranklist[j, idx_bond] = maxbd
+            println(" Sampled L1 error: ", errl1)
+        end
     end
-    savefig(p1, "pw_tci_sampled_l1_error.svg")
-    display(p1)
+
+    return error_l1, mem, error_pivot, rankendlist, ranklist, topo_names
+end
+
+function save_results(prefix, cfg, error_l1, mem, error_pivot, rankendlist, ranklist, topo_names)
+    # Ensure output dir exists
+    outdir = joinpath("results", "PW")
+    mkpath(outdir)
+
+    # Serialized full dump (Julia internal)
+    serfile = joinpath(outdir, string(prefix, "_pw_results.jls"))
+    open(serfile, "w") do io
+        serialize(io, (cfg, error_l1, mem, error_pivot, rankendlist, ranklist, topo_names))
+    end
+
+    # CSV: error_l1 (topo, maxbond, value)
+    errfile = joinpath(outdir, string(prefix, "_error_l1.csv"))
+    open(errfile, "w") do io
+        write(io, "topo,maxbond,value\n")
+        for j in 1:length(topo_names)
+            for (idx_bond, mb) in enumerate(cfg.maxbond)
+                write(io, "$(topo_names[j]),$(mb),$(error_l1[j, idx_bond])\n")
+            end
+        end
+    end
+
+    # CSV: memory usage (topo, maxbond, bytes)
+    memfile = joinpath(outdir, string(prefix, "_memory.csv"))
+    open(memfile, "w") do io
+        write(io, "topo,maxbond,bytes\n")
+        for j in 1:length(topo_names)
+            for (idx_bond, mb) in enumerate(cfg.maxbond)
+                write(io, "$(topo_names[j]),$(mb),$(mem[j, idx_bond])\n")
+            end
+        end
+    end
+
+    return serfile, errfile, memfile
+end
+
+function main()
+    cfg = default_config()
+    error_l1, mem, error_pivot, rankendlist, ranklist, topo_names = run_experiment(cfg)
+    save_results("pw", cfg, error_l1, mem, error_pivot, rankendlist, ranklist, topo_names)
 end
