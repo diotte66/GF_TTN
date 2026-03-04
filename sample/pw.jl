@@ -2,37 +2,10 @@ using Random
 using Plots
 using LaTeXStrings
 using Plots.PlotMeasures
-include(joinpath(@__DIR__, "..", "src", "topologies.jl"))
-include(joinpath(@__DIR__, "..", "src", "utils.jl"))
+include(joinpath(@__DIR__, "..", "src", "utils_gf.jl"))
 using TreeTCI
 using Serialization
 using DelimitedFiles
-
-function sampled_error(f, ttn, nsamples, bits, d)
-    """Compute sampled errors between function f and ttn approximation over nsamples random inputs."""
-    eval_ttn = if ttn isa TreeTCI.SimpleTCI
-        sitetensors = TreeTCI.fillsitetensors(ttn, f)
-        TreeTCI.TreeTensorNetwork(ttn.g, sitetensors)
-    else
-        ttn
-    end
-    error_l1 = 0.0
-    for _ in 1:nsamples
-        x = rand(1:2, d * bits)
-        approx = TreeTCI.evaluate(eval_ttn, x)
-        error_l1 += abs(f(x) - approx)
-    end
-    return error_l1 / nsamples
-end
-
-function bits2decimal(v::AbstractVector{<:Integer})
-    """Convert a vector of bits (1/2) to a decimal number between 0 and 1"""
-    sum = 0.0
-    for i in 1:length(v)
-        sum += (v[i] - 1) * 2.0^(-i)
-    end
-    return sum
-end
 
 function make_pw(d::Int, n_waves::Int, R::Int; seed=42)
     """
@@ -68,8 +41,7 @@ function default_config(; d=3, n_waves=30, R=16, seed=42)
     )
     maxit = 5
     nsamples = 1000
-    maxbond = [3, 6, 9, 12, 15, 18, 21, 24, 27, 30,
-        33, 36, 39, 42, 45, 48, 51, 54, 57, 60]
+    maxbond = [3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45, 48, 51, 54, 57, 60]
 
     pw, k = make_pw(d, n_waves, R; seed=seed)
 
@@ -172,7 +144,7 @@ function save_results(prefix, cfg, error_l1, mem, error_pivot, rankendlist, rank
     return serfile, errfile, memfile
 end
 
-function main(; d=3, n_waves=30, R=16, seed=42)
+function main(; d=1, n_waves=30, R=16, seed=42)
     cfg = default_config(d=d, n_waves=n_waves, R=R, seed=seed)
     println("Running plane wave experiment: d=$d, n_waves=$n_waves, R=$R")
     error_l1, mem, error_pivot, rankendlist, ranklist, topo_names = run_experiment(cfg)

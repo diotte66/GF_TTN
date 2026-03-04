@@ -52,9 +52,8 @@ Encodes kx, ky, t, t' from bits `v` using `nk` and `R`.
 function gkac(v, nk, R, T, β, η, E)
     """ Momentum-dependent equilibrium Green's function G_{kx,ky}(t,t') under an AC field """
     kx, ky, t1, t2 = assign(v, nk, R)
-    A = 20.0
     ω = 1.0
-    intregand(t) = cos(-A * sin(ω * t) / ω) + sin(-A * sin(ω * t) / ω)
+    intregand(t) = cos(-E * sin(ω * t) / ω) + sin(-E * sin(ω * t) / ω)
     Intx = Integrals.quadgk(intregand, 0, T * t1)[1]
     Inty = Integrals.quadgk(intregand, 0, T * t2)[1]
     return 1im * exp(-1im * Intx) * exp(1im * Inty) * exp(-T * (ϵ(kx, ky)^2) * η * abs(t1 - t2)) * n(kx, ky, β)
@@ -105,13 +104,13 @@ Provide canonical parameters and derived values.
 `gf`       is the corresponding closure `(v, T, η) -> ComplexF64`.
 """
 function default_config(; gf_name::String="gkdc")
-    Rt = 30                        # number of time bits
-    Nk = 32                        # number of k-points in each direction
-    nk = Int(log2(Nk))             # number of bits to encode the Nk kx,ky points
-    β = 10.0                      # inverse temperature
-    E = 1.0                       # electric field amplitude for gkdc / gkac
-    maxit = 5                         # maximum number of iterations
-    nsamples = 1000                      # number of samples for error estimation
+    Rt = 30                               # number of time bits
+    Nk = 32.                              # number of k-points in each direction
+    nk = Int(log2(Nk))                    # number of bits to encode the Nk kx,ky points
+    β = 10.0                              # inverse temperature
+    E = 1.0                               # electric field amplitude for gkdc / gkac
+    maxit = 5                             # maximum number of iterations
+    nsamples = 1000                       # number of samples for error estimation
     times = [50.0, 100.0, 150.0, 200.0]
     etas = [0.001, 0.01, 0.1, 0.0, 1.0]   # ← η sweep
     maxbond = [20, 40, 60, 80, 100, 120, 140, 160, 180, 200]
@@ -119,7 +118,7 @@ function default_config(; gf_name::String="gkdc")
     topo = build_topologies(nk, Rt)
 
     _partial = (nk=nk, Rt=Rt, β=β, E=E)
-    gf = make_gf(gf_name, _partial)   # closure: (v, T, η) -> ComplexF64
+    gf = make_gf(gf_name, _partial)       # closure: (v, T, η) -> ComplexF64
 
     return (Rt=Rt, Nk=Nk, nk=nk, β=β, E=E, maxit=maxit, nsamples=nsamples,
         times=times, etas=etas, maxbond=maxbond, localdims=localdims,
