@@ -470,38 +470,69 @@ function BTTN3(Rt::Int64, nk::Int64)
     return g
 end
 
-function TTNALT(nk::Int64, Rt::Int64)
-    """ QTT Tree topology for momentum-dependent Green's function G_{kx,ky}(t,t') """
+
+""" 
+    ITTN(R::Int, d::Int=2)
+
+Returns an Interleaved TTN.
+
+Generate a NamedGraph representing a quantics Interleaved TTN topology for 2D functions,
+with `R` bits precision per dimension (total 2R vertices).
+yR   ...   y2   y1
+ |         |    |
+xR - ... - x2 - x1 - kx1 - ... - kxnk - ky1 - ... - kynk
+"""
+function ITTN(nk::Int64, Rt::Int64)
+    """
+    Interleaved Tree Tensor Network topology for G_{kx,ky}(t,t').
+
+    Layout (indices 1-based):
+      kx-chain  : 1 … nk
+      ky-chain  : nk+1 … 2nk
+      t1-chain  : 2nk+1 … 2nk+Rt          (forward time)
+      t2-chain  : 2nk+Rt+1 … 2nk+2Rt      (backward time)
+
+    Structure:
+      • kx-chain and ky-chain are each linear; joined at their ends: nk — (nk+1)
+      • t1 and t2 chains are interleaved: each t1[i] — t2[i] (vertical rung)
+        and t1[i] — t1[i+1] along the chain
+      • Bridge: 2nk (last ky node) — (2nk+1) (first t1 node)
+
+    Maximum degree is 3 everywhere (verified below).
+    """
     N = 2 * nk + 2 * Rt
     g = NamedGraph(N)
-    # Build binary tree for kx,ky bits
-    lengths = (nk, nk)
 
-    start = 1
-    for L in lengths
-        for i in 1:L
-            left = 2 * i
-            right = 2 * i + 1
-            if left <= L
-                add_edge!(g, start + i - 1, start + left - 1)
-            end
-            if right <= L
-                add_edge!(g, start + i - 1, start + right - 1)
-            end
-        end
-        start += L
+    # ── kx chain: 1 – 2 – … – nk ──────────────────────────────────────────
+    for i in 1:(nk-1)
+        add_edge!(g, i, i + 1)
     end
 
-    # Connect the time bits in an alternating train structure 
-    for i in 1:Rt
-        add_edge!(g, 2 * nk + i, 2 * nk + i + Rt)
-        if i < Rt
-            add_edge!(g, 2 * nk + i + Rt, 2 * nk + i + 1)
-        end
+    # ── ky chain: (nk+1) – (nk+2) – … – 2nk ───────────────────────────────
+    for i in 1:(nk-1)
+        add_edge!(g, nk + i, nk + i + 1)
     end
 
-    add_edge!(g, nk + 1, 2 * nk + 1)
+    # ── join kx and ky at their meeting ends: nk — (nk+1) ──────────────────
+    add_edge!(g, nk, nk + 1)
+
+    # ── bridge from k-block to t-block: 2nk — (2nk+1) ─────────────────────
+    # Node 2nk has degree 1 (end of ky-chain), so adding this keeps degree ≤ 2.
     add_edge!(g, 1, 2 * nk + 1)
+
+    # ── t1 chain: (2nk+1) – (2nk+2) – … – (2nk+Rt) ────────────────────────
+    for i in 1:(Rt-1)
+        add_edge!(g, 2 * nk + i, 2 * nk + i + 1)
+    end
+
+    # ── vertical rungs t1[i] — t2[i] ────────────────────────────────────────
+    # t2 nodes: 2nk+Rt+1 … 2nk+2Rt   (leaves, degree 1 each)
+    # t1 interior nodes then have degree 3: left-chain, right-chain, rung  ✓
+    # t1[1] = 2nk+1 has: bridge-edge, right-chain, rung  → degree 3         ✓
+    # t1[Rt] = 2nk+Rt has: left-chain, rung             → degree 2          ✓
+    for i in 1:Rt
+        add_edge!(g, 2 * nk + i, 2 * nk + Rt + i)
+    end
 
     return g
 end

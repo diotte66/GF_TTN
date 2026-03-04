@@ -1,4 +1,5 @@
 [deps]
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 GraphTikZ = "cef0280d-a2bf-4776-a511-cf6253a7debc"
 ITensorMPS = "0d1a4710-d33b-49a5-8f18-73bdf49b47e2"
 ITensorNetworks = "2919e153-833c-4bdc-8836-1ea460a35fc7"

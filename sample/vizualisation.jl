@@ -261,7 +261,168 @@ function plot_KB_greens(; A=30.0, B=0.0, tmax=1.0, beta=1.0, N=400)
     return Z
 end
 
+function plot_systematic(cfg, error_l1, topo_names)
+    mkpath("PDF/GF_systematic")
+    palette = [:black, :blue, :orange, :green4]
+    markers = [:circle, :square, :diamond, :utriangle]
+    nA = length(cfg.A_list)
+    nB = length(cfg.B_list)
 
+    # ── Plot 1: grille A × B ──────────────────────────────────────────────────
+    fig = plot(layout=(nA, nB), size=(300 * nB, 280 * nA),
+        left_margin=10mm, bottom_margin=8mm)
+    for (iA, A) in enumerate(cfg.A_list)
+        for (iB, B) in enumerate(cfg.B_list)
+            idx = (iA - 1) * nB + iB
+            for (j, name) in enumerate(topo_names)
+                plot!(fig[idx], cfg.maxbond, error_l1[j, iA, iB, :],
+                    label=(iA == 1 && iB == 1) ? name : "",
+                    color=palette[mod1(j, end)],
+                    marker=markers[mod1(j, end)],
+                    markersize=4, linewidth=1.4, yscale=:log10,
+                    xlabel=iA == nA ? "Bond dim" : "",
+                    ylabel=iB == 1 ? "L1 error" : "",
+                    title="A=$(A), B=$(B)",
+                    titlefontsize=8, guidefontsize=8, tickfontsize=7,
+                    legend=idx == 1 ? :topright : false)
+            end
+        end
+    end
+    savefig(fig, "PDF/GF_systematic/grid_A_B.pdf")
+    display(fig)
+
+    # ── Plot 2: ratio vs QTT_Int ───────────────────────────────────────────────
+    ref_idx = findfirst(==("QTT_Int"), topo_names)
+    fig2 = plot(layout=(nA, nB), size=(300 * nB, 280 * nA),
+        left_margin=10mm, bottom_margin=8mm)
+    for (iA, A) in enumerate(cfg.A_list)
+        for (iB, B) in enumerate(cfg.B_list)
+            idx = (iA - 1) * nB + iB
+            for (j, name) in enumerate(topo_names)
+                j == ref_idx && continue
+                ratio = error_l1[j, iA, iB, :] ./ error_l1[ref_idx, iA, iB, :]
+                plot!(fig2[idx], cfg.maxbond, ratio,
+                    label=(iA == 1 && iB == 1) ? "$(name)/QTT_Int" : "",
+                    color=palette[mod1(j, end)],
+                    marker=markers[mod1(j, end)],
+                    markersize=4, linewidth=1.4,
+                    xlabel=iA == nA ? "Bond dim" : "",
+                    ylabel=iB == 1 ? "error ratio" : "",
+                    title="A=$(A), B=$(B)",
+                    titlefontsize=8, guidefontsize=8, tickfontsize=7,
+                    legend=idx == 1 ? :topright : false)
+            end
+            hline!(fig2[idx], [1.0], color=:red, linestyle=:dash,
+                linewidth=1, label=false)
+        end
+    end
+    savefig(fig2, "PDF/GF_systematic/ratio_TTN_QTT.pdf")
+    display(fig2)
+
+    # ── Plot 3: heatmap du gain au bond max ───────────────────────────────────
+    ref_idx = findfirst(==("QTT_Int"), topo_names)
+    for (j, name) in enumerate(topo_names)
+        j == ref_idx && continue
+        gain = [log10(error_l1[j, iA, iB, end] / error_l1[ref_idx, iA, iB, end])
+                for iA in 1:nA, iB in 1:nB]
+        p = heatmap(string.(cfg.B_list), string.(cfg.A_list), gain,
+            xlabel="B (damping)",
+            ylabel="A (frequency)",
+            title="log₁₀($(name) / QTT_Int) at bond=$(cfg.maxbond[end])",
+            color=:RdBu, clims=(-1, 1),
+            guidefont=font(11), tickfont=font(9),
+            left_margin=10mm, bottom_margin=8mm)
+        savefig(p, "PDF/GF_systematic/heatmap_gain_$(name).pdf")
+        display(p)
+    end
+end
+
+function plot_systematic_memory(cfg, error_l1, mem, topo_names)
+    mkpath("PDF/GF_systematic")
+    palette = [:black, :blue, :orange, :green4]
+    markers = [:circle, :square, :diamond, :utriangle]
+    nA = length(cfg.A_list)
+    nB = length(cfg.B_list)
+
+    # ── Plot 1: memory grid A × B ─────────────────────────────────────────────
+    fig = plot(layout=(nA, nB), size=(300 * nB, 280 * nA),
+        left_margin=10mm, bottom_margin=8mm)
+    for (iA, A) in enumerate(cfg.A_list)
+        for (iB, B) in enumerate(cfg.B_list)
+            idx = (iA - 1) * nB + iB
+            for (j, name) in enumerate(topo_names)
+                plot!(fig[idx], cfg.maxbond, mem[j, iA, iB, :] ./ 1e6,
+                    label=(iA == 1 && iB == 1) ? name : "",
+                    color=palette[mod1(j, end)],
+                    marker=markers[mod1(j, end)],
+                    markersize=4, linewidth=1.4,
+                    xlabel=iA == nA ? "Bond dim" : "",
+                    ylabel=iB == 1 ? "Memory (MB)" : "",
+                    title="A=$(A), B=$(B)",
+                    titlefontsize=8, guidefontsize=8, tickfontsize=7,
+                    legend=idx == 1 ? :topleft : false)
+            end
+        end
+    end
+    savefig(fig, "PDF/GF_systematic/grid_memory_A_B.pdf")
+    display(fig)
+
+    # ── Plot 2: memory ratio TTN/QTT vs bond dim ──────────────────────────────
+    ref_idx = findfirst(==("QTT_Int"), topo_names)
+    fig2 = plot(layout=(nA, nB), size=(300 * nB, 280 * nA),
+        left_margin=10mm, bottom_margin=8mm)
+    for (iA, A) in enumerate(cfg.A_list)
+        for (iB, B) in enumerate(cfg.B_list)
+            idx = (iA - 1) * nB + iB
+            for (j, name) in enumerate(topo_names)
+                j == ref_idx && continue
+                ratio = mem[j, iA, iB, :] ./ mem[ref_idx, iA, iB, :]
+                plot!(fig2[idx], cfg.maxbond, ratio,
+                    label=(iA == 1 && iB == 1) ? "$(name)/QTT_Int" : "",
+                    color=palette[mod1(j, end)],
+                    marker=markers[mod1(j, end)],
+                    markersize=4, linewidth=1.4,
+                    xlabel=iA == nA ? "Bond dim" : "",
+                    ylabel=iB == 1 ? "memory ratio" : "",
+                    title="A=$(A), B=$(B)",
+                    titlefontsize=8, guidefontsize=8, tickfontsize=7,
+                    legend=idx == 1 ? :topright : false)
+            end
+            hline!(fig2[idx], [1.0], color=:red, linestyle=:dash,
+                linewidth=1, label=false)
+        end
+    end
+    savefig(fig2, "PDF/GF_systematic/ratio_memory_TTN_QTT.pdf")
+    display(fig2)
+
+    # ── Plot 3: memory vs error scatter (Pareto plot) ─────────────────────────
+    # Each point = one (topology, A, B, bond) combination
+    # Points below and to the left are better (less memory, less error)
+    fig3 = plot(xlabel="Memory (MB)", ylabel="L1 error",
+        xscale=:log10, yscale=:log10,
+        legend=:topright, size=(800, 600),
+        guidefont=font(12), tickfont=font(10),
+        left_margin=10mm, bottom_margin=10mm,
+        framestyle=:box, grid=true)
+    for (j, name) in enumerate(topo_names)
+        # Flatten over all (A, B) pairs, keep bond dimension as the sweep axis
+        mem_flat = vec(mean(mem[j, :, :, :], dims=(1, 2)))  # average over A,B
+        error_flat = vec(mean(error_l1[j, :, :, :], dims=(1, 2)))
+        scatter!(fig3, mem_flat ./ 1e6, error_flat,
+            label=name,
+            color=palette[mod1(j, end)],
+            marker=markers[mod1(j, end)],
+            markersize=6,
+            markerstrokewidth=0.5)
+        # Connect points by bond dimension order
+        plot!(fig3, mem_flat ./ 1e6, error_flat,
+            color=palette[mod1(j, end)],
+            linewidth=1.0,
+            label=false)
+    end
+    savefig(fig3, "PDF/GF_systematic/pareto_memory_error.pdf")
+    display(fig3)
+end
 
 function main(argv)
     prefix = length(argv) >= 1 ? argv[1] : PREFIX
