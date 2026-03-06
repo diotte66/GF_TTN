@@ -1,500 +1,174 @@
-# SETUP WITH MOMENTUM DEPENDENCE COMPRESSION ALONG THE BZ
+# This file defines the Green's functions and the main experiment loop for testing TTN compression on momentum-independent Green's functions.
+
+# =======================================================
+# Libraries and utilities
+# -------------------------------------------------------
 
 using Random
 using Plots
-include(joinpath(@__DIR__, "src", "utils_gk.jl"))
+using LaTeXStrings
+using Plots.PlotMeasures
+using Statistics
+include(joinpath(@__DIR__, "src", "utils_gf.jl"))
 using TreeTCI
+using Serialization
+using CSV
+using DataFrames
 
-"""
-    gk(v, nk, R, T, β, η) -> ComplexF64
+# =======================================================
+# Green's functions
+# -------------------------------------------------------
 
-Equilibrium Green's function G_{kx,ky}(t,t').
-Encodes kx, ky, t, t' from bits `v` using `nk` and `R`.
-β is the inverse temperature and η is the damping factor ~(U/t)^2.
-"""
-
-ϵ1(kx, ky) = -2 * cos(kx) + -0.5 * cos(ky)
-ϵ2(kx, ky) = -0.5 * cos(kx) + -2 * cos(ky)
-function gk(v, nk, R, T, β::Float64, η::Float64)
-    """ Momentum-dependent equilibrium Green's function G_{kx,ky}(t,t') """
-    kx, ky, t1, t2 = assign(v, nk, R)
-    return -1im * n(kx, ky, β) * exp(-1im * ϵ(kx, ky) * T * (t1 - t2)) * exp(-T * (ϵ(kx, ky))^2 * η * abs(t1 - t2))
+function gf(v, T, η)
+    """Green's function in 2D with parameters T (frequency) and η (damping)."""
+    x = bits2decimal(v[1:div(length(v), 2)])
+    y = bits2decimal(v[div(length(v), 2)+1:end])
+    x = T * x
+    y = T * y
+    return 1im * exp(-1im * (x - y)) * exp(-η * abs(x - y))
 end
 
-function gk1(v, nk, R, T, β, η)
-    kx, ky, t1, t2 = assign(v, nk, R)
-    return -1im * n(kx, ky, β) * exp(-1im * ϵ1(kx, ky) * T * (t1 - t2)) * exp(-T * (ϵ1(kx, ky))^2 * η * abs(t1 - t2))
+function dcgf(v, T, η)
+    """Green's function under a DC field in 2D."""
+    x = bits2decimal(v[1:div(length(v), 2)])
+    y = bits2decimal(v[div(length(v), 2)+1:end])
+    E = 10.0
+    return 1im * exp(-1im * T * (sin(E * x) / E + (cos(E * x) - 1) / E)) *
+           exp(1im * T * (sin(E * y) / E + (cos(E * y) - 1) / E)) *
+           exp(-η * abs(x - y))
 end
 
-function gk2(v, nk, R, T, β, η)
-    kx, ky, t1, t2 = assign(v, nk, R)
-    return -1im * n(kx, ky, β) * exp(-1im * ϵ2(kx, ky) * T * (t1 - t2)) * exp(-T * (ϵ2(kx, ky))^2 * η * abs(t1 - t2))
+function acgf(v, T, η)
+    """Green's function under an AC field in 2D."""
+    x = bits2decimal(v[1:div(length(v), 2)])
+    y = bits2decimal(v[div(length(v), 2)+1:end])
+    ω = 1.0
+    integrand(t) = cos(-T * sin(ω * t) / ω) + sin(-T * sin(ω * t) / ω)
+    Intx = Integrals.quadgk(integrand, 0, x)[1]
+    Inty = Integrals.quadgk(integrand, 0, y)[1]
+    return 1im * exp(-1im * Intx) * exp(1im * Inty) * exp(-η * abs(x - y))
 end
 
-"""
-    gkdc(v, nk, R, T, β, E) -> ComplexF64
-Equilibrium Green's function with energy-dependent compression along the diagonal in the BZ.
-Encodes kx, ky, t, t' from bits `v` using `nk` and `R`.
-β is the inverse temperature, E controls the electric field amplitude, and η is the damping factor ~(U/t)^2.
-"""
+# =======================================================
+# Build and optimise the two TTNs
+# -------------------------------------------------------
 
-function gkdc(v, nk::Int64, R::Int64, T::Float64, β::Float64, η::Float64, E::Float64)
-    """ Momentum-dependent equilibrium Green's function G_{kx,ky}(t,t') """
-    kx, ky, t1, t2 = assign(v, nk, R)
-    return -1im * exp(-1im * ((ϵ(kx, ky) * sin(E * T * t1) / E) + δ(kx, ky) * (cos(E * T * t1) - 1) / E - ϵ(kx, ky) * sin(E * T * t2) / E - δ(kx, ky) * (cos(E * T * t2) - 1) / E)) * exp(-T * (ϵ(kx, ky)^2) * 0.01 * abs(t1 - t2)) * n(kx, ky, β)
+localdims = fill(2, 32)
+g1 = ITTN(16, 2)
+g2 = QTT_Alt(16, 2)
+
+f = v -> gf(v, 10.0, 0.5)
+
+ttn1 = TreeTCI.SimpleTCI{ComplexF64}(f, localdims, g1)
+ttn2 = TreeTCI.SimpleTCI{ComplexF64}(f, localdims, g2)
+seed_pivots!(ttn1, 5, f)
+seed_pivots!(ttn2, 5, f)
+TreeTCI.optimize!(ttn1, f;
+    tolerance=1e-16, maxiter=5, maxbonddim=5,
+    sweepstrategy=TreeTCI.LocalAdjacentSweep2sitePathProposer())
+err1 = sampled_error(f, ttn1, 1000, 32)
+println("L1 error for ITTN    : $err1")
+TreeTCI.optimize!(ttn2, f;
+    tolerance=1e-16, maxiter=5, maxbonddim=5,
+    sweepstrategy=TreeTCI.LocalAdjacentSweep2sitePathProposer())
+err2 = sampled_error(f, ttn2, 1000, 32)
+println("L1 error for QTT_Alt : $err2")
+
+# =======================================================
+# Decompress both TTNs onto a 2D grid and compare
+# -------------------------------------------------------
+
+# Build the TreeTensorNetworks for evaluation
+sitetensors1 = TreeTCI.fillsitetensors(ttn1, f)
+net1         = TreeTCI.TreeTensorNetwork(ttn1.g, sitetensors1)
+sitetensors2 = TreeTCI.fillsitetensors(ttn2, f)
+net2         = TreeTCI.TreeTensorNetwork(ttn2.g, sitetensors2)
+
+"""
+    decode_bits(ix, iy, R) -> Vector{Int}
+
+Convert grid indices (ix, iy) ∈ {1,…,2^R} to a bit vector of length 2R
+using the interleaved or sequential encoding consistent with bits2decimal.
+The first R entries encode x, the last R encode y (both in {1,2}).
+"""
+function decode_bits(ix::Int, iy::Int, R::Int)
+    v = Vector{Int}(undef, 2R)
+    for k in 1:R
+        v[k]     = ((ix - 1) >> (R - k)) & 1 + 1   # x bits
+        v[R + k] = ((iy - 1) >> (R - k)) & 1 + 1   # y bits
+    end
+    return v
 end
 
+R  = 16
+N  = 2^R                    # full grid would be 2^16 × 2^16 — too large
+# Use a coarser grid for visualisation: stride every 2^s points
+s  = 8                      # stride exponent: sample every 2^8 = 256 points
+Ng = 2^(R - s)              # number of grid points per axis (= 256)
 
-"""
-    build_topologies(nk, Rt) -> Dict{String, NamedGraph}
+xs = [(bits2decimal([(((i-1) >> (R-k)) & 1) + 1 for k in 1:R])) * 10.0 for i in 1:Ng:N]
+ys = xs
 
-Convenience selector for topologies to test.
-"""
-function build_topologies(nk::Int, Rt::Int)
-    return Dict(
-        #"QTT_Alt4" => QTTALT4(Rt, nk),
-        "CTTN_Alt2" => CTTNALT2(Rt, nk),
-        "QTT_AltX" => QTTALTX(Rt, nk),
-        "QTT_AltY" => QTTALTY(Rt, nk),
-        "TTN_Alt" => TTNALT(Rt, nk),
-        #"BTTN" => BTTN(Rt, nk),
-        #"BTTN2" => BTTN2(Rt, nk),
-        #"BTTN3" => BTTN3(Rt, nk)
+# Evaluate exact function, ITTN approximation and QTT_Alt approximation on the grid
+Z_exact = Matrix{ComplexF64}(undef, length(xs), length(ys))
+Z_ttn1  = Matrix{ComplexF64}(undef, length(xs), length(ys))
+Z_ttn2  = Matrix{ComplexF64}(undef, length(xs), length(ys))
+
+println("Evaluating on $(length(xs))×$(length(ys)) grid …")
+for (i, ix) in enumerate(1:Ng:N)
+    for (j, iy) in enumerate(1:Ng:N)
+        v            = decode_bits(ix, iy, R)
+        Z_exact[i,j] = f(v)
+        Z_ttn1[i,j]  = TreeTCI.evaluate(net1, v)
+        Z_ttn2[i,j]  = TreeTCI.evaluate(net2, v)
+    end
+end
+
+Z_err1 = abs.(Z_exact .- Z_ttn1)
+Z_err2 = abs.(Z_exact .- Z_ttn2)
+
+# =======================================================
+# Plots
+# -------------------------------------------------------
+
+mkpath("PDF/GF_visual")
+
+function make_comparison_plot(Z_exact, Z_ttn1, Z_ttn2, Z_err1, Z_err2, xs, ys; part=real, part_name="Re")
+    clim_val = maximum(abs.(part.(Z_exact)))
+    clim_err = max(maximum(Z_err1), maximum(Z_err2))
+
+    kw_val = (xlabel=L"t", ylabel=L"t'", guidefontsize=10, tickfontsize=8,
+              left_margin=8mm, bottom_margin=8mm, right_margin=6mm,
+                 clims=(-clim_val, clim_val), framestyle=:box)
+    kw_err = (xlabel=L"t", ylabel=L"t'", guidefontsize=10, tickfontsize=8,
+              left_margin=8mm, bottom_margin=8mm, right_margin=6mm,
+                clims=(0, clim_err), framestyle=:box)
+
+    p1 = heatmap(xs, ys, part.(Z_exact)';
+        title=L"G^<_0(t,t')", kw_val...)
+    p2 = heatmap(xs, ys, Z_err1';
+        title=L"G^<_0 - G^<_{\mathrm{ITTN}}", kw_err...)
+    p3 = heatmap(xs, ys, Z_err2';
+        title=L"G^<_0 - G^<_{\mathrm{QTT}}", kw_err...)
+
+    fig = plot(p1, p2, p3;
+        layout        = (1, 3),
+        size          = (1050, 340),
+        top_margin    = 6mm,
     )
-end
-"""
-    default_config() -> NamedTuple
-
-Provide canonical parameters and derived values.
-"""
-function default_config()
-    Rt = 30 # number of time bits
-    Nk = 32 # number of k-points in each direction
-    nk = Int(log2(Nk)) # number of bits to encode the Nk kx,ky points
-    β = 10.0 # inverse temperature
-    η = 0.01 # damping factor ~(U/t)^2
-    E = 1.0 # electric field amplitude for gkdc
-    # list of `nk` values (bits) to sweep when varying momentum resolution
-    nk_list = [nk, nk + 1, nk + 2, nk + 3]
-    maxit = 5 # maximum number of iterations
-    nsamples = 1000 # number of samples for error estimation
-    times = [200.0] # max times to evaluate
-    maxbond = [20, 40, 60, 80, 100, 120, 140, 160, 180, 200] # max bond dimensions
-    localdims = fill(2, 2 * Rt + 2 * nk) # local dimensions for all vertices
-    topo = build_topologies(nk, Rt)
-    return (Rt=Rt, Nk=Nk, nk=nk, nk_list=nk_list, β=β, η=η, E=E, maxit=maxit, nsamples=nsamples,
-        times=times, maxbond=maxbond, localdims=localdims, topo=topo)
+    return fig
 end
 
-"""
-    run_experiment(cfg) -> (error_l1, mem, topo_names)
+# Real part
+fig_re = make_comparison_plot(Z_exact, Z_ttn1, Z_ttn2, Z_err1, Z_err2, xs, ys;
+    part=real, part_name="Re")
+savefig(fig_re, "PDF/GF_visual/comparison_real.pdf")
+display(fig_re)
+println("Saved → PDF/GF_visual/comparison_real.pdf")
 
-Run compression across times and bond dimensions for all selected topologies.
-"""
-function run_experiment(cfg)
-    ntopos = length(cfg.topo)
-    error_l1 = zeros(ntopos, length(cfg.times), length(cfg.maxbond))
-    mem = zeros(ntopos, length(cfg.times), length(cfg.maxbond))
-    topo_names = collect(keys(cfg.topo))
-
-    for (k, tmax) in enumerate(cfg.times)
-        println("============ Time T = $tmax ============")
-        for (idx_bond, maxbd) in enumerate(cfg.maxbond)
-            println("Max bond dimension: $maxbd")
-            for (j, name) in enumerate(topo_names)
-                topology = cfg.topo[name]
-                println("Topology: $name")
-                kwargs = (
-                    maxiter=cfg.maxit,
-                    maxbonddim=maxbd,
-                    sweepstrategy=TreeTCI.LocalAdjacentSweep2sitePathProposer(),
-                )
-                ttn = TreeTCI.SimpleTCI{ComplexF64}(v -> gkdc(v, cfg.nk, cfg.Rt, tmax, cfg.β, cfg.η, cfg.E), cfg.localdims, topology)
-                # utils_gk.jl defines seed_pivots!(tci, npivots)
-                seed_pivots!(ttn, 25, v -> gkdc(v, cfg.nk, cfg.Rt, tmax, cfg.β, cfg.η, cfg.E))
-                ranks, errors, bonds = TreeTCI.optimize!(ttn, v -> gkdc(v, cfg.nk, cfg.Rt, tmax, cfg.β, cfg.η, cfg.E); kwargs...)
-                mem[j, k, idx_bond] = Base.summarysize(ttn)
-                errl1 = sampled_error(v -> gkdc(v, cfg.nk, cfg.Rt, tmax, cfg.β, cfg.η, cfg.E), ttn, cfg.nsamples, 2 * cfg.Rt + 2 * cfg.nk)
-                error_l1[j, k, idx_bond] = errl1
-                println(" Sampled L1 error: ", errl1)
-            end
-        end
-    end
-
-    return error_l1, mem, topo_names
-end
-
-"""
-    run_experiment_for_fn(cfg, f) -> (error_l1, mem, topo_names)
-
-Same as `run_experiment` but uses the supplied function `f(v, nk, R, T, β, η)`
-instead of the hard-coded `gkdc`.
-"""
-function run_experiment_for_fn(cfg, f)
-    ntopos = length(cfg.topo)
-    error_l1 = zeros(ntopos, length(cfg.times), length(cfg.maxbond))
-    mem = zeros(ntopos, length(cfg.times), length(cfg.maxbond))
-    topo_names = collect(keys(cfg.topo))
-
-    for (k, tmax) in enumerate(cfg.times)
-        println("============ Time T = $tmax ============")
-        for (idx_bond, maxbd) in enumerate(cfg.maxbond)
-            println("Max bond dimension: $maxbd")
-            for (j, name) in enumerate(topo_names)
-                topology = cfg.topo[name]
-                println("Topology: $name")
-                kwargs = (
-                    maxiter=cfg.maxit,
-                    maxbonddim=maxbd,
-                    sweepstrategy=TreeTCI.LocalAdjacentSweep2sitePathProposer(),
-                )
-                ttn = TreeTCI.SimpleTCI{ComplexF64}(v -> f(v, cfg.nk, cfg.Rt, tmax, cfg.β, cfg.η), cfg.localdims, topology)
-                # utils_gk.jl defines seed_pivots!(tci, npivots)
-                seed_pivots!(ttn, 25, v -> f(v, cfg.nk, cfg.Rt, tmax, cfg.β, cfg.η))
-                ranks, errors, bonds = TreeTCI.optimize!(ttn, v -> f(v, cfg.nk, cfg.Rt, tmax, cfg.β, cfg.η); kwargs...)
-                mem[j, k, idx_bond] = Base.summarysize(ttn)
-                errl1 = sampled_error(v -> f(v, cfg.nk, cfg.Rt, tmax, cfg.β, cfg.η), ttn, cfg.nsamples, 2 * cfg.Rt + 2 * cfg.nk)
-                error_l1[j, k, idx_bond] = errl1
-                println(" Sampled L1 error: ", errl1)
-            end
-        end
-    end
-
-    return error_l1, mem, topo_names
-end
-
-"""
-    run_experiment_all(cfg, fn_list, fn_names)
-
-Run `run_experiment_for_fn` for each function in `fn_list` and return combined arrays
-with a leading function dimension.
-"""
-function run_experiment_all(cfg, fn_list::AbstractVector, fn_names::AbstractVector{String})
-    nfuncs = length(fn_list)
-    # run one to get shapes
-    sample_err, sample_mem, topo_names = run_experiment_for_fn(cfg, fn_list[1])
-    ntopos = length(topo_names)
-    ntimes = length(cfg.times)
-    nbonds = length(cfg.maxbond)
-    error_all = zeros(nfuncs, ntopos, ntimes, nbonds)
-    mem_all = zeros(nfuncs, ntopos, ntimes, nbonds)
-
-    for (i, f) in enumerate(fn_list)
-        println("Running function: ", fn_names[i])
-        err, mem, _ = run_experiment_for_fn(cfg, f)
-        error_all[i, :, :, :] .= err
-        mem_all[i, :, :, :] .= mem
-    end
-    return error_all, mem_all, topo_names, fn_names
-end
-
-"""
-    run_experiment_over_nk_for_fn(cfg, f) -> (error_l1, mem, topo_names)
-
-Same as `run_experiment_over_nk` but uses supplied function `f`.
-"""
-function run_experiment_over_nk_for_fn(cfg, f)
-    nk_list = cfg.nk_list
-    first_topo = build_topologies(Int(nk_list[1]), cfg.Rt)
-    topo_names = collect(keys(first_topo))
-    ntopos = length(topo_names)
-    error_l1 = zeros(ntopos, length(nk_list), length(cfg.maxbond))
-    mem = zeros(ntopos, length(nk_list), length(cfg.maxbond))
-
-    tmax = 100.0
-    for (ik, nkv) in enumerate(nk_list)
-        println("============ nk = $nkv ============")
-        topo = build_topologies(Int(nkv), cfg.Rt)
-        for (idx_bond, maxbd) in enumerate(cfg.maxbond)
-            println("Max bond dimension: $maxbd")
-            for (j, name) in enumerate(topo_names)
-                println("Topology: $name")
-                topology = topo[name]
-                localdims = fill(2, 2 * cfg.Rt + 2 * Int(nkv))
-                kwargs = (
-                    maxiter=cfg.maxit,
-                    maxbonddim=maxbd,
-                    sweepstrategy=TreeTCI.LocalAdjacentSweep2sitePathProposer(),
-                )
-                ttn = TreeTCI.SimpleTCI{ComplexF64}(v -> f(v, Int(nkv), cfg.Rt, tmax, cfg.β, cfg.η), localdims, topology)
-                seed_pivots!(ttn, 25, v -> f(v, Int(nkv), cfg.Rt, tmax, cfg.β, cfg.η))
-                ranks, errors, bonds = TreeTCI.optimize!(ttn, v -> f(v, Int(nkv), cfg.Rt, tmax, cfg.β, cfg.η); kwargs...)
-                mem[j, ik, idx_bond] = Base.summarysize(ttn)
-                errl1 = sampled_error(v -> f(v, Int(nkv), cfg.Rt, tmax, cfg.β, cfg.η), ttn, cfg.nsamples, 2 * cfg.Rt + 2 * Int(nkv))
-                error_l1[j, ik, idx_bond] = errl1
-                println(" Sampled L1 error: ", errl1)
-            end
-        end
-    end
-    return error_l1, mem, topo_names
-end
-
-function run_experiment_over_nk_all(cfg, fn_list::AbstractVector, fn_names::AbstractVector{String})
-    nfuncs = length(fn_list)
-    # run one to get shapes
-    sample_err, sample_mem, topo_names = run_experiment_over_nk_for_fn(cfg, fn_list[1])
-    ntopos = length(topo_names)
-    nnk = length(cfg.nk_list)
-    nbonds = length(cfg.maxbond)
-    error_all = zeros(nfuncs, ntopos, nnk, nbonds)
-    mem_all = zeros(nfuncs, ntopos, nnk, nbonds)
-
-    for (i, f) in enumerate(fn_list)
-        println("Running nk-sweep for function: ", fn_names[i])
-        err, mem, _ = run_experiment_over_nk_for_fn(cfg, f)
-        error_all[i, :, :, :] .= err
-        mem_all[i, :, :, :] .= mem
-    end
-    return error_all, mem_all, topo_names, cfg.nk_list, fn_names
-end
-
-function main_all()
-    cfg = default_config()
-    f_list = [gk, gk1, gk2]
-    fn_names = ["gk", "gk1", "gk2"]
-    error_all, mem_all, topo_names, fn_names = run_experiment_all(cfg, f_list, fn_names)
-    # user can inspect error_all / mem_all; also run nk sweep
-    error_nk_all, mem_nk_all, topo_names, nk_list, fn_names = run_experiment_over_nk_all(cfg, f_list, fn_names)
-    return error_all, mem_all, error_nk_all, mem_nk_all, topo_names, nk_list, fn_names
-end
-
-"""
-    run_experiment_over_nk(cfg, nk_list) -> (error_l1, mem, topo_names, nk_list)
-
-Run compression across different `nk` values (vary momentum resolution) for a fixed time (T=100).
-Returns arrays shaped (ntopos, length(nk_list), length(cfg.maxbond)).
-
-"""
-function run_experiment_over_nk(cfg)
-    nk_list = cfg.nk_list
-    first_topo = build_topologies(Int(nk_list[1]), cfg.Rt)
-    topo_names = collect(keys(first_topo))
-    ntopos = length(topo_names)
-    error_l1 = zeros(ntopos, length(nk_list), length(cfg.maxbond))
-    mem = zeros(ntopos, length(nk_list), length(cfg.maxbond))
-
-    tmax = 100.0
-    for (ik, nkv) in enumerate(nk_list)
-        println("============ nk = $nkv ============")
-        topo = build_topologies(Int(nkv), cfg.Rt)
-        for (idx_bond, maxbd) in enumerate(cfg.maxbond)
-            println("Max bond dimension: $maxbd")
-            for (j, name) in enumerate(topo_names)
-                println("Topology: $name")
-                topology = topo[name]
-                localdims = fill(2, 2 * cfg.Rt + 2 * Int(nkv))
-                kwargs = (
-                    maxiter=cfg.maxit,
-                    maxbonddim=maxbd,
-                    sweepstrategy=TreeTCI.LocalAdjacentSweep2sitePathProposer(),
-                )
-                ttn = TreeTCI.SimpleTCI{ComplexF64}(v -> gkdc(v, Int(nkv), cfg.Rt, tmax, cfg.β, cfg.η, cfg.E), localdims, topology)
-                seed_pivots!(ttn, 25, v -> gkdc(v, Int(nkv), cfg.Rt, tmax, cfg.β, cfg.η, cfg.E))
-                ranks, errors, bonds = TreeTCI.optimize!(ttn, v -> gkdc(v, Int(nkv), cfg.Rt, tmax, cfg.β, cfg.η, cfg.E); kwargs...)
-                mem[j, ik, idx_bond] = Base.summarysize(ttn)
-                errl1 = sampled_error(v -> gkdc(v, Int(nkv), cfg.Rt, tmax, cfg.β, cfg.η, cfg.E), ttn, cfg.nsamples, 2 * cfg.Rt + 2 * Int(nkv))
-                error_l1[j, ik, idx_bond] = errl1
-                println(" Sampled L1 error: ", errl1)
-            end
-        end
-    end
-    return error_l1, mem, topo_names, cfg.nk_list
-end
-
-"""
-    plot_error_curves(error_l1, times, maxbond, topo_names; outfile)
-
-Create and save error curves per topology and time.
-"""
-function plot_error_curves(error_l1, times, maxbond, topo_names; outfile="gkdc_compression_error.svg")
-    subplots = []
-    for (i, T) in enumerate(times)
-        subplot = plot(title="Time T = $T", xlabel="Max Bond Dimension", ylabel="L1 Error", yscale=:log10)
-        for (j, name) in enumerate(topo_names)
-            plot!(subplot, maxbond, error_l1[j, i, :], label="$name, T=$T", marker=:o)
-        end
-        push!(subplots, subplot)
-    end
-    n = length(times)
-    ncols = 2
-    nrows = ceil(Int, n / ncols)
-    plt = plot(subplots..., layout=(nrows, ncols), size=(1200, 900))
-    savefig(plt, outfile)
-    display(plt)
-end
-
-"""
-    plot_memory_curves(mem, times, maxbond, topo_names; outfile)
-
-Create and save memory usage curves per topology and time.
-"""
-function plot_memory_curves(mem, times, maxbond, topo_names; outfile="gkdc_compression_memory.svg")
-    subplots = []
-    for (i, T) in enumerate(times)
-        subplot2 = plot(title="Time T = $T", xlabel="Max Bond Dimension", ylabel="Memory usage (Bytes)")
-        for (j, name) in enumerate(topo_names)
-            plot!(subplot2, maxbond, mem[j, i, :], label="$name, T=$T", marker=:o)
-        end
-        push!(subplots, subplot2)
-    end
-    n = length(times)
-    ncols = 2
-    nrows = ceil(Int, n / ncols)
-    plt2 = plot(subplots..., layout=(nrows, ncols), size=(1200, 900))
-    savefig(plt2, outfile)
-    display(plt2)
-end
-
-function plot_error_curves_nk(error_l1, nk_list, maxbond, topo_names, outfile="gk_compression_error_nk.svg")
-    subplots = []
-    for (i, nk) in enumerate(nk_list)
-        subplot = plot(title="nk = $nk", xlabel="Max Bond Dimension", ylabel="L1 Error", yscale=:log10)
-        for (j, name) in enumerate(topo_names)
-            plot!(subplot, maxbond, error_l1[j, i, :], label="$name, nk=$nk", marker=:o)
-        end
-        push!(subplots, subplot)
-    end
-    n = length(nk_list)
-    ncols = 2
-    nrows = ceil(Int, n / ncols)
-    plt = plot(subplots..., layout=(nrows, ncols), size=(1200, 900))
-    savefig(plt, outfile)
-    display(plt)
-
-end
-
-function plot_memory_curves_nk(mem, nk_list, maxbond, topo_names, outfile="gk_compression_memory_nk.svg")
-    subplots = []
-    for (i, nk) in enumerate(nk_list)
-        subplot2 = plot(title="nk = $nk", xlabel="Max Bond Dimension", ylabel="Memory usage (Bytes)")
-        for (j, name) in enumerate(topo_names)
-            plot!(subplot2, maxbond, mem[j, i, :], label="$name, nk=$nk", marker=:o)
-        end
-        push!(subplots, subplot2)
-    end
-    n = length(nk_list)
-    ncols = 2
-    nrows = ceil(Int, n / ncols)
-    plt2 = plot(subplots..., layout=(nrows, ncols), size=(1200, 900))
-    savefig(plt2, outfile)
-    display(plt2)
-end
-
-function bondplottrain()
-    times = [20.0, 40.0, 80.0, 160.0]
-    listlist = Vector{Int}[]
-    cfg = default_config()
-    for i in 1:length(times)
-        kwargs = (
-            maxiter=cfg.maxit,
-            tolerance=1e-6,
-            sweepstrategy=TreeTCI.LocalAdjacentSweep2sitePathProposer(),
-        )
-        time = times[i]
-        ttn = TreeTCI.SimpleTCI{ComplexF64}(v -> gkdc(v, cfg.nk, cfg.Rt, time, cfg.β, cfg.η, cfg.E), cfg.localdims, cfg.topo["QTT_Alt"])
-        # utils_gk.jl defines seed_pivots!(tci, npivots)
-        seed_pivots!(ttn, 25, v -> gkdc(v, cfg.nk, cfg.Rt, time, cfg.β, cfg.η, cfg.E))
-        ranks, errors, bonds = TreeTCI.optimize!(ttn, v -> gkdc(v, cfg.nk, cfg.Rt, time, cfg.β, cfg.η, cfg.E); kwargs...)
-        errl1 = sampled_error(v -> gkdc(v, cfg.nk, cfg.Rt, time, cfg.β, cfg.η, cfg.E), ttn, cfg.nsamples, 2 * cfg.Rt + 2 * cfg.nk)
-        println(" Sampled L1 error: ", errl1)
-        list = trainbondlist(bonds, cfg.nk, cfg.Rt)
-        push!(listlist, list)
-    end
-    multipletrainbondplot(listlist, cfg.nk, cfg.Rt, times)
-end
-
-function bondplottrain4()
-    times = [20.0, 40.0, 80.0, 160.0, 200.0, 400.0, 800.0]
-    listlist = Vector{Int}[]
-    cfg = default_config()
-    for i in 1:length(times)
-        kwargs = (
-            maxiter=cfg.maxit,
-            tolerance=1e-6,
-            sweepstrategy=TreeTCI.LocalAdjacentSweep2sitePathProposer(),
-        )
-        time = times[i]
-        ttn = TreeTCI.SimpleTCI{ComplexF64}(v -> gkdc(v, cfg.nk, cfg.Rt, time, cfg.β, cfg.η, cfg.E), cfg.localdims, cfg.topo["QTT_Alt4"])
-        # utils_gk.jl defines seed_pivots!(tci, npivots)
-        seed_pivots!(ttn, 25, v -> gkdc(v, cfg.nk, cfg.Rt, time, cfg.β, cfg.η, cfg.E))
-        ranks, errors, bonds = TreeTCI.optimize!(ttn, v -> gkdc(v, cfg.nk, cfg.Rt, time, cfg.β, cfg.η, cfg.E); kwargs...)
-        errl1 = sampled_error(v -> gkdc(v, cfg.nk, cfg.Rt, time, cfg.β, cfg.η, cfg.E), ttn, cfg.nsamples, 2 * cfg.Rt + 2 * cfg.nk)
-        println(" Sampled L1 error: ", errl1)
-        list = trainbondlist4(bonds, cfg.nk, cfg.Rt)
-        push!(listlist, list)
-    end
-    multipletrainbondplot4(listlist, cfg.nk, cfg.Rt, times)
-end
-
-function bondplotfork()
-    times = [20.0, 40.0, 80.0, 160.0]
-    listlistkx = Vector{Int}[]
-    listlistky = Vector{Int}[]
-    cfg = default_config()
-    for i in 1:length(times)
-        kwargs = (
-            maxiter=cfg.maxit,
-            tolerance=1e-6,
-            sweepstrategy=TreeTCI.LocalAdjacentSweep2sitePathProposer(),
-        )
-        time = times[i]
-        ttn = TreeTCI.SimpleTCI{ComplexF64}(v -> gkdc(v, cfg.nk, cfg.Rt, time, cfg.β, cfg.η, cfg.E), cfg.localdims, cfg.topo["CTTN_Alt2"])
-        seed_pivots!(ttn, 25, v -> gkdc(v, cfg.nk, cfg.Rt, time, cfg.β, cfg.η, cfg.E))
-        ranks, errors, bonds = TreeTCI.optimize!(ttn, v -> gkdc(v, cfg.nk, cfg.Rt, time, cfg.β, cfg.η, cfg.E); kwargs...)
-        errl1 = sampled_error(v -> gkdc(v, cfg.nk, cfg.Rt, time, cfg.β, cfg.η, cfg.E), ttn, cfg.nsamples, 2 * cfg.Rt + 2 * cfg.nk)
-        println(" Sampled L1 error: ", errl1)
-        listkx, listky = forkbondlist(bonds, cfg.nk, cfg.Rt)
-        push!(listlistkx, listkx)
-        push!(listlistky, listky)
-    end
-    println(listlistkx)
-    multipleforkbondplot(listlistkx, listlistky, cfg.nk, cfg.Rt, times)
-end
-
-function bondplotfork2()
-    times = [20.0, 40.0, 80.0, 160.0]
-    cfg = default_config()
-    for i in 1:length(times)
-        kwargs = (
-            maxiter=cfg.maxit,
-            tolerance=1e-6,
-            sweepstrategy=TreeTCI.LocalAdjacentSweep2sitePathProposer(),
-        )
-        time = times[i]
-        ttn = TreeTCI.SimpleTCI{ComplexF64}(v -> gkdc(v, cfg.nk, cfg.Rt, time, cfg.β, cfg.η, cfg.E), cfg.localdims, cfg.topo["CTTN_Alt2"])
-        seed_pivots!(ttn, 25, v -> gkdc(v, cfg.nk, cfg.Rt, time, cfg.β, cfg.η, cfg.E))
-        ranks, errors, bonds = TreeTCI.optimize!(ttn, v -> gkdc(v, cfg.nk, cfg.Rt, time, cfg.β, cfg.η, cfg.E); kwargs...)
-        errl1 = sampled_error(v -> gkdc(v, cfg.nk, cfg.Rt, time, cfg.β, cfg.η, cfg.E), ttn, cfg.nsamples, 2 * cfg.Rt + 2 * cfg.nk)
-        println(" Sampled L1 error: ", errl1)
-        println("Ranks: ", ranks)
-        println("Bonds: ", bonds)
-    end
-end
-
-"""
-    preview_gk(kx, ky)
-
-Quick visualization of G(t,t') at a fixed k using utils.
-"""
-function preview_gk(kx::Float64, ky::Float64, β::Float64, η::Float64, tmax::Float64)
-    plotgk(kx, ky, β, η, tmax)
-end
-
-"""
-    main()
-
-Entry point: configure, run, and plot results.
-"""
-function main()
-    cfg = default_config()
-    error_l1, mem, topo_names = run_experiment(cfg)
-    plot_error_curves(error_l1, cfg.times, cfg.maxbond, topo_names)
-    plot_memory_curves(mem, cfg.times, cfg.maxbond, topo_names)
-end
-
-function main_nk()
-    cfg = default_config()
-    error_l1, mem, topo_names, nk_list = run_experiment_over_nk(cfg)
-    plot_error_curves_nk(error_l1, nk_list, cfg.maxbond, topo_names)
-    plot_memory_curves_nk(mem, nk_list, cfg.maxbond, topo_names)
-end
+# Imaginary part
+fig_im = make_comparison_plot(Z_exact, Z_ttn1, Z_ttn2, Z_err1, Z_err2, xs, ys;
+    part=imag, part_name="Im")
+savefig(fig_im, "PDF/GF_visual/comparison_imag.pdf")
+display(fig_im)
+println("Saved → PDF/GF_visual/comparison_imag.pdf")

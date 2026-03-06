@@ -4,8 +4,8 @@ using Graphs
 using TreeTCI
 using NamedGraphs
 
-function sampled_error(f, ttn, nsamples, bits, d)
-    """Compute sampled errors between function f and ttn approximation over nsamples random inputs."""
+function sampled_error(f, ttn, nsamples::Int64, bits::Int64)
+    """ Compute sampled errors between function f and ttn approximation over nsamples random inputs of length 2*bits."""
     eval_ttn = if ttn isa TreeTCI.SimpleTCI
         sitetensors = TreeTCI.fillsitetensors(ttn, f)
         TreeTCI.TreeTensorNetwork(ttn.g, sitetensors)
@@ -14,9 +14,10 @@ function sampled_error(f, ttn, nsamples, bits, d)
     end
     error_l1 = 0.0
     for _ in 1:nsamples
-        x = rand(1:2, d * bits)
+        x = rand(1:2, bits)
         approx = TreeTCI.evaluate(eval_ttn, x)
-        error_l1 += abs(f(x) - approx)
+        err = abs(f(x) - approx)
+        error_l1 += err
     end
     return error_l1 / nsamples
 end
@@ -205,3 +206,136 @@ function ITTN(R::Int, d::Int=2)
     return g
 end
 
+# =======================================================
+# Kadanoff-Baym Green's function on the L-shaped contour
+# -------------------------------------------------------
+
+function plot_KB_greens(; A=30.0, B=0.0, tmax=1.0, beta=1.0, N=400)
+    """
+    Plot G_k^0(z,z') on the Kadanoff-Baym L-shaped contour.
+    Contour ordering: C1 (0->tmax) ≺ C2 (tmax->0) ≺ C3 (0->-ibeta)
+    θ_C(z,z') = 1 if z ≻ z' (z comes LATER in contour ordering), 0 otherwise.
+
+    G^0_k(z,z') = -i[θ_C(z,z') - f_T] * exp(-i*A*(t-t')) * exp(-B*|t-t'|)
+    where the exponential uses the real-time difference for real-time components,
+    and imaginary-time difference for Matsubara components.
+    """
+
+    f_T(ε) = 0
+    fT0 = f_T(0.0)  # epsilon_k = 0 for simplicity
+
+    # Contour index: C1=1, C2=2, C3=3
+    # Within each segment, contour position increases with the segment parameter
+    # C1: position increases with t (0 -> tmax)
+    # C2: position increases as t decreases (tmax -> 0), so index N+1..2N corresponds to tmax..0
+    # C3: position increases with tau (0 -> beta)
+
+    # θ_C(z, z') = 1 if z ≻ z' i.e. z comes later in contour
+    function theta_C(seg1, idx1, seg2, idx2)
+        if seg1 > seg2
+            return 1.0  # z on later segment => z ≻ z'
+        elseif seg1 < seg2
+            return 0.0
+        else
+            # same segment: compare position within segment
+            # C1: larger index = later in contour
+            # C2: larger index = later in contour (since C2 goes tmax->0, idx N+1 is tmax, 2N is t=0)
+            # C3: larger index = later in contour
+            return idx1 > idx2 ? 1.0 : 0.0
+        end
+    end
+
+    # The full propagator: G = -i * [θ_C - f_T] * kernel
+    # kernel depends on the block:
+    #   real-real:  exp(-i*A*(t1-t2)) * exp(-B*|t1-t2|)
+    #   real-imag:  exp(-i*A*t1) * exp(-A*tau2)          (integral along mixed contour)
+    #   imag-real:  exp(+i*A*t2) * exp(-A*(beta-tau1))   (conjugate)
+    #   imag-imag:  exp(-A*(tau1-tau2))
+
+    function kernel(seg1, t1, tau1, seg2, t2, tau2)
+        if seg1 <= 2 && seg2 <= 2
+            # real-real block
+            dt = t1 - t2
+            return exp(-1im * A * dt) * exp(-B * abs(dt))
+        elseif seg1 <= 2 && seg2 == 3
+            # G^⌐: real time z1, imaginary time z2
+            # integral from z2 (imaginary) to z1 (real) along contour
+            return exp(-1im * A * t1) * exp(-B * t1) * exp(-A * tau2)
+        elseif seg1 == 3 && seg2 <= 2
+            # G^⌏: imaginary z1, real z2
+            return exp(1im * A * t2) * exp(-B * t2) * exp(-A * (beta - tau1))
+        else
+            # Matsubara-Matsubara
+            dtau = tau1 - tau2
+            return exp(-A * dtau) * exp(-B * abs(dtau))
+        end
+    end
+
+    # Build full matrix
+    M = 3 * N
+    Z = zeros(ComplexF64, M, M)
+
+    ts = range(0, tmax, length=N)
+    taus = range(0, beta, length=N)
+
+    for i in 1:M
+        for j in 1:M
+            # Determine segment and local index
+            seg_i = i <= N ? 1 : (i <= 2N ? 2 : 3)
+            seg_j = j <= N ? 1 : (j <= 2N ? 2 : 3)
+
+            loc_i = seg_i == 1 ? i : (seg_i == 2 ? i - N : i - 2N)
+            loc_j = seg_j == 1 ? j : (seg_j == 2 ? j - N : j - 2N)
+
+            # Physical time/tau values
+            # C1: t increases 0->tmax with index
+            # C2: t decreases tmax->0 with index (contour goes backward)
+            t1 = seg_i == 1 ? ts[loc_i] : (seg_i == 2 ? ts[N+1-loc_i] : 0.0)
+            t2 = seg_j == 1 ? ts[loc_j] : (seg_j == 2 ? ts[N+1-loc_j] : 0.0)
+            tau1 = seg_i == 3 ? taus[loc_i] : 0.0
+            tau2 = seg_j == 3 ? taus[loc_j] : 0.0
+
+            θ = theta_C(seg_i, loc_i, seg_j, loc_j)
+            K = kernel(seg_i, t1, tau1, seg_j, t2, tau2)
+
+            Z[i, j] = -1im * (θ - fT0) * K
+        end
+    end
+
+    # ── Plotting ──────────────────────────────────────────────────────────────
+    mkpath("PDF/GF")
+
+    tick_pos = [0, N, 2N, 3N]
+    tick_labs = ["0", L"$t_{\max}$", "0", L"$-i\beta$"]
+    clims = (-1.0, 1.0)
+
+    function make_panel(mat, title_str)
+        p = heatmap(1:M, 1:M, mat; clims=clims,
+            xticks=(tick_pos, tick_labs),
+            yticks=(tick_pos, tick_labs),
+            xlabel=L"$z_2$", ylabel=L"$z_1$",
+            title=title_str,
+            aspect_ratio=:equal,
+            size=(700, 700),
+            guidefont=font(13), tickfont=font(10),
+            colorbar_tickfont=font(9),
+            xlims=(0, M), ylims=(0, M),   # ← c'est ça le fix
+            left_margin=5mm, bottom_margin=5mm)
+        vline!([N, 2N], color=:white, linewidth=2, label=false)
+        hline!([N, 2N], color=:white, linewidth=2, label=false)
+        return p
+    end
+
+    p_real = make_panel(real.(Z), "")
+    p_imag = make_panel(imag.(Z), "")
+
+    savefig(p_real, "PDF/GF/KB_greens_real.pdf")
+    savefig(p_imag, "PDF/GF/KB_greens_imag.pdf")
+
+    combined = plot(p_real, p_imag, layout=(2, 1), size=(800, 1400),
+        left_margin=-8mm, bottom_margin=40px)
+    savefig(combined, "PDF/GF/KB_greens_combined.pdf")
+    display(combined)
+
+    return Z
+end

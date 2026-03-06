@@ -190,7 +190,7 @@ function run_experiment(cfg)
     df = DataFrame(rows)
 
     # ── Save to CSV ────────────────────────────────────────────────────────────
-    csv_path = joinpath(@__DIR__, "results", "$(cfg.gf_name).csv")
+    csv_path = joinpath(@__DIR__, "$(cfg.gf_name).csv")
     CSV.write(csv_path, df)
     println("\nResults saved to: $csv_path")
     # ──────────────────────────────────────────────────────────────────────────

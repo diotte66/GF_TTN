@@ -23,13 +23,10 @@ function gf(v, T, η)
     """Green's function in 2D with parameters T (frequency) and η (damping)."""
     x = bits2decimal(v[1:div(length(v), 2)])
     y = bits2decimal(v[div(length(v), 2)+1:end])
+    # Increase the time domains
     x = T * x
     y = T * y
-    if x > y
-        return 1im * exp(-1im * (x - y)) * exp(-η * (x - y))
-    else
-        return 0
-    end
+    return 1im * exp(-1im * (x - y)) * exp(-η * abs(x - y))
 end
 
 function dcgf(v, T, η)
@@ -94,8 +91,8 @@ function default_config(; gf_name::String="gf")
     )
     maxit = 5
     nsamples = 1000
-    maxbond = [3, 6, 9, 12, 15, 18, 21, 24, 27, 30]
-    times = [1.0, 5.0, 15.0, 30.0, 50.0, 100.0, 200.0, 400.0]
+    maxbond = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+    times = [50.0, 100.0, 200.0, 400.0]
     etas = [0.5, 2.0, 5.0, 10.0]
 
     f = make_gf(gf_name)
@@ -130,11 +127,11 @@ function run_experiment(cfg)
                 for (toponame, topology) in cfg.topo
                     println("    Topology: $toponame")
                     ttn = TreeTCI.SimpleTCI{ComplexF64}(f, cfg.localdims, topology)
-                    seed_pivots!(ttn, 5, f)
+                    seed_pivots!(ttn, 15, f)
                     TreeTCI.optimize!(ttn, f;
                         tolerance=1e-16, maxiter=cfg.maxit, maxbonddim=maxbd,
                         sweepstrategy=TreeTCI.LocalAdjacentSweep2sitePathProposer())
-                    errl1 = sampled_error(f, ttn, cfg.nsamples, cfg.R, cfg.d)
+                    errl1 = sampled_error(f, ttn, cfg.nsamples, cfg.R * cfg.d)
                     mem_bytes = Base.summarysize(ttn)
                     println("      $toponame → L1 = $errl1  |  mem = $mem_bytes bytes")
                     push!(rows, (

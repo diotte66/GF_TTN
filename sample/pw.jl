@@ -99,7 +99,7 @@ function run_experiment(cfg)
             ranks, errors = TreeTCI.optimize!(ttn, cfg.pw;
                 maxiter=cfg.maxit, maxbonddim=maxbd,
                 sweepstrategy=TreeTCI.LocalAdjacentSweep2sitePathProposer())
-            errl1 = sampled_error(cfg.pw, ttn, cfg.nsamples, cfg.R, cfg.d)
+            errl1 = sampled_error(cfg.pw, ttn, cfg.nsamples, cfg.R * cfg.d)
             mem[j, idx_bond] = Base.summarysize(ttn)
             error_l1[j, idx_bond] = errl1
             error_pivot[j, idx_bond] = errors[end]
